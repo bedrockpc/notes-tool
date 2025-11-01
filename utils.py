@@ -8,7 +8,7 @@ import google.generativeai as genai
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 import pandas as pd
-from io import BytesIO # Essential for in-memory file handling
+from io import BytesIO 
 
 # --- Configuration and Constants ---
 
@@ -18,7 +18,6 @@ EXPECTED_KEYS = [
     "exam_focus_points", "common_mistakes_explained"
 ]
 
-# Note: Using triple quotes for multi-line string clarity
 SYSTEM_PROMPT = """
 You are a master academic analyst creating a concise, timestamped study guide from a video transcript file. The transcript text contains timestamps in formats like (MM:SS) or [HH:MM:SS].
 
@@ -72,6 +71,7 @@ def get_video_id(url: str) -> str | None:
     return None
 
 def clean_gemini_response(response_text: str) -> str:
+    # Extracts the JSON object, handles markdown fences (```json...```)
     match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', response_text, re.DOTALL)
     if match: return match.group(1) if match.group(1) else match.group(2)
     return response_text.strip()
@@ -82,11 +82,32 @@ def summarize_with_gemini(api_key: str, transcript_text: str) -> dict | None:
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-pro-latest')
+        
+        # 1. Send Request
         response = model.generate_content(f"{SYSTEM_PROMPT}\n\nTranscript:\n---\n{transcript_text}")
+        
+        # 2. Extract JSON (Handles Markdown Fence)
         cleaned_response = clean_gemini_response(response.text)
+
+        # 3. Aggressive JSON Post-Processing (FIX for Incomplete Output)
+        # This fixes common failures (like trailing characters) from large responses.
+        if cleaned_response.endswith(','):
+            cleaned_response = cleaned_response.rstrip(',')
+        if not cleaned_response.endswith('}'):
+            # Aggressively search for the final valid bracket and truncate everything after it.
+            last_bracket = cleaned_response.rfind('}')
+            if last_bracket != -1:
+                cleaned_response = cleaned_response[:last_bracket + 1]
+
+        # 4. Attempt to Load JSON
         return json.loads(cleaned_response)
+        
+    except json.JSONDecodeError:
+        print("    > JSON DECODE ERROR: Failed to parse API response.")
+        print(f"    > Truncated Response (first 500 chars): {cleaned_response[:500]}...")
+        return None
     except Exception as e:
-        print(f"    > An error occurred with the API call: {e}")
+        print(f"    > An unexpected error occurred with the API call: {e}")
         return None
 
 def format_timestamp(seconds: int) -> str:
@@ -96,7 +117,6 @@ def format_timestamp(seconds: int) -> str:
 
 def ensure_valid_youtube_url(video_id: str) -> str:
     """Returns a properly formatted YouTube base URL for hyperlinking."""
-    # Note: Using the standard https URL, not the one with www.youtube.com from original code
     return f"https://www.youtube.com/watch?v={video_id}"
 
 # --- PDF Class ---
@@ -104,7 +124,6 @@ class PDF(FPDF):
     def __init__(self, font_path, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.font_name = "NotoSans"
-        # Must use str() on Path objects when passing to FPDF
         self.add_font(self.font_name, "", str(font_path / "NotoSans-Regular.ttf"))
         self.add_font(self.font_name, "B", str(font_path / "NotoSans-Bold.ttf"))
 
@@ -141,7 +160,6 @@ class PDF(FPDF):
 
 # --- Save to Excel (XLSX) Function ---
 def save_to_excel(data: dict, output):
-    # This function uses BytesIO for in-memory streaming
     flat_data = []
     for key, values in data.items():
         if key == "main_subject" or not values:
@@ -154,28 +172,23 @@ def save_to_excel(data: dict, output):
                     row["Topic"] = item.get('topic', '')
                     for detail in item['details']:
                         detail_row = row.copy()
-                        # Clean highlight tags from detail text
                         detail_row["Detail"] = detail.get('detail', '').replace('<hl>', '').replace('</hl>', '')
                         detail_row["Time (s)"] = detail.get('time', 0)
                         flat_data.append(detail_row)
                 else:
                     for sk, sv in item.items():
-                        # Clean highlight tags from all text fields
                         row[sk.replace('_', ' ').title()] = str(sv).replace('<hl>', '').replace('</hl>', '')
                     flat_data.append(row)
             else:
                 flat_data.append({"Section": section_name, "Item": str(item)})
 
     df = pd.DataFrame(flat_data)
-    
-    # Write directly to the BytesIO buffer or file path
     df.to_excel(output, index=False, sheet_name="Summary")
     if isinstance(output, BytesIO):
         output.seek(0)
 
 # --- Save to PDF Function ---
 def save_to_pdf(data: dict, video_id: str, font_path: Path, output):
-    # This function uses BytesIO for in-memory streaming
     base_url = ensure_valid_youtube_url(video_id)
     pdf = PDF(font_path=font_path)
     pdf.add_page()
@@ -212,7 +225,6 @@ def save_to_pdf(data: dict, video_id: str, font_path: Path, output):
             pdf.ln(4)
         pdf.ln(5)
 
-    # Output to the BytesIO buffer or file path
     pdf.output(output)
     if isinstance(output, BytesIO):
         output.seek(0)

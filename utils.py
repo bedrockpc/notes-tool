@@ -81,7 +81,8 @@ def summarize_with_gemini(api_key: str, transcript_text: str) -> dict | None:
     print("    > Sending transcript to Gemini API...")
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro-latest')
+        # CRITICAL FIX: Changed to gemini-2.5-flash for greater stability and token capacity
+        model = genai.GenerativeModel('gemini-2.5-flash') 
         
         # 1. Send Request
         response = model.generate_content(f"{SYSTEM_PROMPT}\n\nTranscript:\n---\n{transcript_text}")
@@ -90,7 +91,6 @@ def summarize_with_gemini(api_key: str, transcript_text: str) -> dict | None:
         cleaned_response = clean_gemini_response(response.text)
 
         # 3. Aggressive JSON Post-Processing (FIX for Incomplete Output)
-        # This fixes common failures (like trailing characters) from large responses.
         if cleaned_response.endswith(','):
             cleaned_response = cleaned_response.rstrip(',')
         if not cleaned_response.endswith('}'):

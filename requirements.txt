@@ -1,6 +1,7 @@
+
 streamlit
-google-genai
+google-generativeai 
 fpdf2
 pandas
-openpyxl  
-python-doc
+openpyxl
+python-docx

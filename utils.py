@@ -8,7 +8,7 @@ import google.generativeai as genai
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 import pandas as pd
-from io import BytesIO
+from io import BytesIO # Essential for in-memory file handling
 
 # --- Configuration and Constants ---
 
@@ -18,11 +18,43 @@ EXPECTED_KEYS = [
     "exam_focus_points", "common_mistakes_explained"
 ]
 
-SYSTEM_PROMPT = """ ... (keep your SYSTEM_PROMPT here) ... """
+# Note: Using triple quotes for multi-line string clarity
+SYSTEM_PROMPT = """
+You are a master academic analyst creating a concise, timestamped study guide from a video transcript file. The transcript text contains timestamps in formats like (MM:SS) or [HH:MM:SS].
 
+**Primary Goal:** Create a detailed summary. For any key point you extract, you MUST find its closest preceding timestamp in the text and include it in your response as total seconds.
+
+**Instructions:**
+1.  Analyze the entire transcript.
+2.  For every piece of information you extract, find the nearest timestamp that comes *before* it in the text. Convert that timestamp into **total seconds** (e.g., (01:30) becomes 90).
+3.  **Highlighting:** Inside any 'detail', 'definition', 'explanation', or 'insight' string, find the single most critical phrase (3-5 words) and wrap it in `<hl>` and `</hl>` tags. For example: 'The derivative is a <hl>rate of change</hl>.' Do this only once per item where appropriate.
+4.  Be concise. Each point must be a short, clear sentence.
+5.  Extract the following information:
+    -   main_subject: A short phrase identifying the main subject.
+    -   topic_breakdown: For each topic, list details as objects with "detail" and "time" keys.
+    -   key_vocabulary: A list of objects with "term", "definition", and "time" keys.
+    -   formulas_and_principles: A list of objects with "formula_or_principle", "explanation", and "time" keys.
+    -   teacher_insights: A list of objects with "insight", and "time" keys.
+    -   exam_focus_points: A list of objects with "point", and "time" keys.
+    -   common_mistakes_explained: A list of objects with "mistake", "explanation", and "time" keys.
+6.  Return your output **only** as a single, valid JSON object.
+
+The JSON structure must be exactly as follows:
+{
+  "main_subject": "Subject Name",
+  "topic_breakdown": [{"topic": "Topic 1", "details": [{"detail": "This is a <hl>short detail</hl>.", "time": 120}]}],
+  "key_vocabulary": [{"term": "Term 1", "definition": "A <hl>short definition</hl>.", "time": 150}],
+  "formulas_and_principles": [{"formula_or_principle": "Principle 1", "explanation": "A <hl>brief explanation</hl>.", "time": 180}],
+  "teacher_insights": [{"insight": "<hl>Short insight</hl> 1.", "time": 210}],
+  "exam_focus_points": [{"point": "Brief <hl>focus point</hl> 1.", "time": 240}],
+  "common_mistakes_explained": [{"mistake": "Mistake 1", "explanation": "A <hl>short explanation</hl>.", "time": 270}]
+}
+"""
+
+# --- Color Palette (Used for PDF generation) ---
 COLORS = {
     "title_bg": (40, 54, 85), "title_text": (255, 255, 255),
-    "heading_text": (40, 54, 85), "link_text": (0, 0, 255),
+    "heading_text": (40, 54, 85), "link_text": (0, 0, 255), 
     "body_text": (30, 30, 30), "line": (220, 220, 220),
     "highlight_bg": (255, 255, 0)
 }
@@ -45,6 +77,7 @@ def clean_gemini_response(response_text: str) -> str:
     return response_text.strip()
 
 def summarize_with_gemini(api_key: str, transcript_text: str) -> dict | None:
+    # Print statements are kept for debugging purposes in Streamlit logs
     print("    > Sending transcript to Gemini API...")
     try:
         genai.configure(api_key=api_key)
@@ -62,7 +95,8 @@ def format_timestamp(seconds: int) -> str:
     return f"[{minutes:02}:{seconds:02}]"
 
 def ensure_valid_youtube_url(video_id: str) -> str:
-    """Returns a properly formatted YouTube base URL."""
+    """Returns a properly formatted YouTube base URL for hyperlinking."""
+    # Note: Using the standard https URL, not the one with www.youtube.com from original code
     return f"https://www.youtube.com/watch?v={video_id}"
 
 # --- PDF Class ---
@@ -70,6 +104,7 @@ class PDF(FPDF):
     def __init__(self, font_path, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.font_name = "NotoSans"
+        # Must use str() on Path objects when passing to FPDF
         self.add_font(self.font_name, "", str(font_path / "NotoSans-Regular.ttf"))
         self.add_font(self.font_name, "B", str(font_path / "NotoSans-Bold.ttf"))
 
@@ -104,8 +139,9 @@ class PDF(FPDF):
                 self.write(7, part)
         self.ln()
 
-# --- Save to Excel (supports BytesIO) ---
+# --- Save to Excel (XLSX) Function ---
 def save_to_excel(data: dict, output):
+    # This function uses BytesIO for in-memory streaming
     flat_data = []
     for key, values in data.items():
         if key == "main_subject" or not values:
@@ -118,25 +154,28 @@ def save_to_excel(data: dict, output):
                     row["Topic"] = item.get('topic', '')
                     for detail in item['details']:
                         detail_row = row.copy()
-                        detail_row["Detail"] = detail.get('detail', '')
+                        # Clean highlight tags from detail text
+                        detail_row["Detail"] = detail.get('detail', '').replace('<hl>', '').replace('</hl>', '')
                         detail_row["Time (s)"] = detail.get('time', 0)
                         flat_data.append(detail_row)
                 else:
                     for sk, sv in item.items():
-                        row[sk.replace('_', ' ').title()] = str(sv)
+                        # Clean highlight tags from all text fields
+                        row[sk.replace('_', ' ').title()] = str(sv).replace('<hl>', '').replace('</hl>', '')
                     flat_data.append(row)
             else:
                 flat_data.append({"Section": section_name, "Item": str(item)})
 
     df = pd.DataFrame(flat_data)
+    
+    # Write directly to the BytesIO buffer or file path
+    df.to_excel(output, index=False, sheet_name="Summary")
     if isinstance(output, BytesIO):
-        df.to_excel(output, index=False, sheet_name="Summary")
         output.seek(0)
-    else:
-        df.to_excel(str(output), index=False, sheet_name="Summary")
 
-# --- Save to PDF (supports BytesIO) ---
+# --- Save to PDF Function ---
 def save_to_pdf(data: dict, video_id: str, font_path: Path, output):
+    # This function uses BytesIO for in-memory streaming
     base_url = ensure_valid_youtube_url(video_id)
     pdf = PDF(font_path=font_path)
     pdf.add_page()
@@ -157,7 +196,7 @@ def save_to_pdf(data: dict, video_id: str, font_path: Path, output):
                     display_text = f"    • {detail_item.get('detail', '')}"
                     pdf.write_highlighted_text(display_text)
                     pdf.set_text_color(*COLORS["link_text"])
-                    pdf.cell(0, 7, text=f"[{timestamp_sec//60:02}:{timestamp_sec%60:02}]", link=link, new_x=pdf.get_x(), new_y=pdf.get_y(), align="R")
+                    pdf.cell(0, 7, text=format_timestamp(timestamp_sec), link=link, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="R")
             else:
                 timestamp_sec = int(item.get('time', 0))
                 link = f"{base_url}&t={timestamp_sec}s"
@@ -169,12 +208,11 @@ def save_to_pdf(data: dict, video_id: str, font_path: Path, output):
                         pdf.set_font(pdf.font_name, "", 11)
                         pdf.write_highlighted_text(str(sv))
                 pdf.set_text_color(*COLORS["link_text"])
-                pdf.cell(0, 7, text=f"[{timestamp_sec//60:02}:{timestamp_sec%60:02}]", link=link, new_x=pdf.get_x(), new_y=pdf.get_y(), align="R")
+                pdf.cell(0, 7, text=format_timestamp(timestamp_sec), link=link, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="R")
             pdf.ln(4)
         pdf.ln(5)
 
+    # Output to the BytesIO buffer or file path
+    pdf.output(output)
     if isinstance(output, BytesIO):
-        pdf.output(output)
         output.seek(0)
-    else:
-        pdf.output(str(output))

@@ -7,13 +7,8 @@ from pathlib import Path
 import google.generativeai as genai
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
-from dotenv import load_dotenv
 import pandas as pd
-from docx import Document
-from docx.shared import Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
+from io import BytesIO
 
 # --- Configuration and Constants ---
 
@@ -71,7 +66,6 @@ def ensure_valid_youtube_url(video_id: str) -> str:
     return f"https://www.youtube.com/watch?v={video_id}"
 
 # --- PDF Class ---
-
 class PDF(FPDF):
     def __init__(self, font_path, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -110,24 +104,77 @@ class PDF(FPDF):
                 self.write(7, part)
         self.ln()
 
-# --- Excel, Word, PDF Saving Functions ---
+# --- Save to Excel (supports BytesIO) ---
+def save_to_excel(data: dict, output):
+    flat_data = []
+    for key, values in data.items():
+        if key == "main_subject" or not values:
+            continue
+        section_name = key.replace('_', ' ').title()
+        for item in values:
+            row = {"Section": section_name}
+            if isinstance(item, dict):
+                if 'details' in item and isinstance(item['details'], list):
+                    row["Topic"] = item.get('topic', '')
+                    for detail in item['details']:
+                        detail_row = row.copy()
+                        detail_row["Detail"] = detail.get('detail', '')
+                        detail_row["Time (s)"] = detail.get('time', 0)
+                        flat_data.append(detail_row)
+                else:
+                    for sk, sv in item.items():
+                        row[sk.replace('_', ' ').title()] = str(sv)
+                    flat_data.append(row)
+            else:
+                flat_data.append({"Section": section_name, "Item": str(item)})
 
-def save_to_excel(data: dict, output_path: Path):
-    # ... Keep your original save_to_excel() code unchanged ...
-    pass
+    df = pd.DataFrame(flat_data)
+    if isinstance(output, BytesIO):
+        df.to_excel(output, index=False, sheet_name="Summary")
+        output.seek(0)
+    else:
+        df.to_excel(str(output), index=False, sheet_name="Summary")
 
-def add_hyperlink(paragraph, text, url):
-    # ... Keep your original add_hyperlink() code unchanged ...
-    pass
-
-def save_to_word(data: dict, video_id: str, output_path: Path):
-    print(f"    > Saving to Word: {output_path.name}")
+# --- Save to PDF (supports BytesIO) ---
+def save_to_pdf(data: dict, video_id: str, font_path: Path, output):
     base_url = ensure_valid_youtube_url(video_id)
-    # ... Rest of the function unchanged, just use base_url for hyperlinks ...
-    pass
+    pdf = PDF(font_path=font_path)
+    pdf.add_page()
+    pdf.create_title(data.get("main_subject", "Video Summary"))
 
-def save_to_pdf(data: dict, video_id: str, font_path: Path, output_path: Path):
-    print(f"    > Saving elegantly hyperlinked PDF: {output_path.name}")
-    base_url = ensure_valid_youtube_url(video_id)
-    # ... Rest of the function unchanged, just use base_url for hyperlinks ...
-    pass
+    for key, values in data.items():
+        if key == "main_subject" or not values:
+            continue
+        pdf.create_section_heading(key.replace('_', ' ').title())
+        for item in values:
+            is_nested = any(isinstance(v, list) for v in item.values())
+            if is_nested:
+                pdf.set_font(pdf.font_name, "B", 11)
+                pdf.multi_cell(0, 7, text=f"  {item.get('topic', '')}")
+                for detail_item in item.get('details', []):
+                    timestamp_sec = int(detail_item.get('time', 0))
+                    link = f"{base_url}&t={timestamp_sec}s"
+                    display_text = f"    • {detail_item.get('detail', '')}"
+                    pdf.write_highlighted_text(display_text)
+                    pdf.set_text_color(*COLORS["link_text"])
+                    pdf.cell(0, 7, text=f"[{timestamp_sec//60:02}:{timestamp_sec%60:02}]", link=link, new_x=pdf.get_x(), new_y=pdf.get_y(), align="R")
+            else:
+                timestamp_sec = int(item.get('time', 0))
+                link = f"{base_url}&t={timestamp_sec}s"
+                for sk, sv in item.items():
+                    if sk != 'time':
+                        pdf.set_text_color(*COLORS["body_text"])
+                        pdf.set_font(pdf.font_name, "B", 11)
+                        pdf.write(7, f"• {sk.replace('_', ' ').title()}: ")
+                        pdf.set_font(pdf.font_name, "", 11)
+                        pdf.write_highlighted_text(str(sv))
+                pdf.set_text_color(*COLORS["link_text"])
+                pdf.cell(0, 7, text=f"[{timestamp_sec//60:02}:{timestamp_sec%60:02}]", link=link, new_x=pdf.get_x(), new_y=pdf.get_y(), align="R")
+            pdf.ln(4)
+        pdf.ln(5)
+
+    if isinstance(output, BytesIO):
+        pdf.output(output)
+        output.seek(0)
+    else:
+        pdf.output(str(output))

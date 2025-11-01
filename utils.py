@@ -81,7 +81,7 @@ def summarize_with_gemini(api_key: str, transcript_text: str) -> dict | None:
     print("    > Sending transcript to Gemini API...")
     try:
         genai.configure(api_key=api_key)
-        # CRITICAL FIX: Changed to gemini-2.5-flash for greater stability and token capacity
+        # CRITICAL FIX: Upgraded to gemini-2.5-flash for greater stability and token capacity
         model = genai.GenerativeModel('gemini-2.5-flash') 
         
         # 1. Send Request

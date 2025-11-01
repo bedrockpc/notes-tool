@@ -1,0 +1,6 @@
+streamlit
+google-genai
+fpdf2
+pandas
+openpyxl  
+python-doc
